@@ -217,7 +217,24 @@ class CausalSelfAttention(nn.Module):
         # store self.num_heads, self.head_dim (= embed_dim // num_heads), self.embed_dim
         # create self.qkv, self.out_proj, self.attn_drop, self.resid_drop
         # create the causal mask and register it as a buffer named "mask"
-        raise NotImplementedError
+        assert embed_dim % num_heads == 0
+
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.embed_dim = embed_dim
+
+        self.qkv = nn.Linear(embed_dim, 3 * embed_dim, bias=False)
+
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+
+        self.attn_drop = nn.Dropout(dropout)
+
+        self.resid_drop = nn.Dropout(dropout)
+
+        mask = torch.tril(torch.ones(block_size, block_size))
+        mask = mask.view(1, 1, block_size, block_size)
+
+        self.register_buffer("mask", mask)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # TODO 1.2 – forward:
@@ -229,7 +246,38 @@ class CausalSelfAttention(nn.Module):
         # 6. Softmax over the last dimension, then apply self.attn_drop
         # 7. Multiply by v, reshape back to (B, T, C)
         # 8. Apply self.out_proj and self.resid_drop
-        raise NotImplementedError
+        B, T, C = x.shape
+
+        qkv = self.qkv(x)
+
+        q, k, v = qkv.split(self.embed_dim, dim=2)
+
+        q = q.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+
+        k = k.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+
+        v = v.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+
+        att = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+
+        att = att.masked_fill(
+            self.mask[:, :, :T, :T] == 0,
+            float("-inf")
+        )
+
+        att = F.softmax(att, dim=-1)
+
+        att = self.attn_drop(att)
+
+        y = att @ v
+
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+
+        y = self.out_proj(y)
+
+        y = self.resid_drop(y)
+
+        return y
 
 
 # ---------------------------------------------------------------------------
